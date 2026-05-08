@@ -342,14 +342,11 @@ class VirtualCameraGUI(QMainWindow):
                 # 转换为QPixmap
                 height, width, channel = img_rgb.shape
                 bytes_per_line = 3 * width
-                q_img = QPixmap.fromImage(
-                    QImage(
-                        img_rgb.data, width, height, bytes_per_line, 
-                        QImage.Format_RGB888
-                    )
-                )
+                q_img = QImage(img_rgb.data, width, height, bytes_per_line, 
+                               QImage.Format_RGB888).copy()
+                q_pixmap = QPixmap.fromImage(q_img)
                 
-                self.preview_label.setPixmap(q_img)
+                self.preview_label.setPixmap(q_pixmap)
             else:
                 self.preview_label.setText('无法加载图片')
         except Exception as e:
@@ -402,24 +399,21 @@ class VirtualCameraGUI(QMainWindow):
                     resolution = VirtualCamera.get_image_resolution(self.current_image_path)
                     if resolution:
                         width, height = resolution
-                        # 只有当分辨率不同时才尝试改变
                         if self.virtual_camera.width != width or self.virtual_camera.height != height:
-                            # 停止摄像头
                             self.virtual_camera.stop()
-                            # 更新分辨率
                             self.virtual_camera.width = width
                             self.virtual_camera.height = height
-                            # 加载图片
                             self.virtual_camera.load_image(self.current_image_path)
-                            # 重新启动摄像头
                             if self.virtual_camera.start():
                                 self.status_label.setText(f'自适应分辨率已启用，分辨率已调整为 {width}x{height}')
                                 self.start_btn.setEnabled(False)
                                 self.stop_btn.setEnabled(True)
                             else:
-                                self.status_label.setText('自适应分辨率已启用，但摄像头重启失败')
+                                self.virtual_camera = None
                                 self.start_btn.setEnabled(True)
                                 self.stop_btn.setEnabled(False)
+                                self.timer.stop()
+                                self.status_label.setText('自适应分辨率已启用，但摄像头重启失败')
             else:
                 self.status_label.setText(f'自适应分辨率已{"启用" if self.auto_resolution else "禁用"}')
         except Exception as e:
@@ -533,51 +527,57 @@ class VirtualCameraGUI(QMainWindow):
         Args:
             image_path: 新图片路径
         """
-        if self.virtual_camera:
-            # 如果启用了自适应分辨率，检查是否需要改变分辨率
-            if self.auto_resolution:
-                resolution = VirtualCamera.get_image_resolution(image_path)
-                if resolution:
-                    width, height = resolution
-                    # 更新分辨率选择器显示
-                    self.update_resolution_from_image()
-                    # 只有当分辨率不同时才需要重启摄像头
-                    if self.virtual_camera.width != width or self.virtual_camera.height != height:
-                        # 分辨率需要改变，重启摄像头
-                        was_running = self.virtual_camera.is_running()
+        cam = self.virtual_camera
+        if not cam:
+            return
+
+        if self.auto_resolution:
+            resolution = VirtualCamera.get_image_resolution(image_path)
+            if resolution:
+                width, height = resolution
+                self.update_resolution_from_image()
+                if cam.width != width or cam.height != height:
+                    was_running = cam.is_running()
+                    if was_running:
+                        cam.stop()
+
+                    cam.width = width
+                    cam.height = height
+
+                    if not cam.load_image(image_path):
+                        self.status_label.setText('更新图片失败')
                         if was_running:
-                            self.virtual_camera.stop()
-                        
-                        # 更新分辨率
-                        self.virtual_camera.width = width
-                        self.virtual_camera.height = height
-                        
-                        # 加载新图片
-                        if not self.virtual_camera.load_image(image_path):
-                            self.status_label.setText('更新图片失败')
-                            return
-                        
-                        # 重新启动摄像头
-                        if was_running:
-                            if self.virtual_camera.start():
-                                self.status_label.setText(f'图片已更新，分辨率已调整为 {width}x{height}')
-                                # 更新按钮状态
+                            if cam.start():
                                 self.start_btn.setEnabled(False)
                                 self.stop_btn.setEnabled(True)
                             else:
-                                self.status_label.setText('图片已更新，但摄像头重启失败')
+                                self.virtual_camera = None
                                 self.start_btn.setEnabled(True)
                                 self.stop_btn.setEnabled(False)
-                        else:
-                            self.status_label.setText(f'图片已更新，分辨率已调整为 {width}x{height}')
+                                self.timer.stop()
+                                self.status_label.setText('更新图片失败，摄像头重启也失败')
                         return
-            
-            # 分辨率不需要改变，或者未启用自适应分辨率
-            if self.virtual_camera.is_running():
-                if self.virtual_camera.load_image(image_path):
-                    self.status_label.setText(f'图片已更新 - {os.path.basename(image_path)}')
-                else:
-                    self.status_label.setText('更新图片失败')
+
+                    if was_running:
+                        if cam.start():
+                            self.status_label.setText(f'图片已更新，分辨率已调整为 {width}x{height}')
+                            self.start_btn.setEnabled(False)
+                            self.stop_btn.setEnabled(True)
+                        else:
+                            self.virtual_camera = None
+                            self.start_btn.setEnabled(True)
+                            self.stop_btn.setEnabled(False)
+                            self.timer.stop()
+                            self.status_label.setText('图片已更新，但摄像头重启失败')
+                    else:
+                        self.status_label.setText(f'图片已更新，分辨率已调整为 {width}x{height}')
+                    return
+
+        if cam.is_running():
+            if cam.load_image(image_path):
+                self.status_label.setText(f'图片已更新 - {os.path.basename(image_path)}')
+            else:
+                self.status_label.setText('更新图片失败')
 
     def update_status(self):
         """更新状态"""

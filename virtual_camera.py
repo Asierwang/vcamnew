@@ -66,35 +66,46 @@ class VirtualCamera:
     
     def stop(self):
         """停止虚拟摄像头"""
-        self.running = False
+        with self.lock:
+            self.running = False
         if self.thread:
-            self.thread.join(timeout=2)
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                print("警告: 输出线程未能在超时内退出")
         if self.cam:
-            self.cam.close()
+            try:
+                self.cam.close()
+            except Exception:
+                pass
             self.cam = None
-        # 给OBS虚拟摄像头时间释放资源
+        with self.lock:
+            self.current_frame = None
         time.sleep(0.5)
     
     def _output_loop(self):
         """输出帧的循环"""
-        while self.running and self.cam:
+        while self.running:
             try:
                 with self.lock:
+                    if not self.running:
+                        break
+                    cam = self.cam
+                    h, w = self.height, self.width
                     if self.current_frame is not None:
-                        frame = self.current_frame
+                        frame = self.current_frame.copy()
                     else:
-                        # 默认显示黑色屏幕
-                        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                        frame = np.zeros((h, w, 3), dtype=np.uint8)
                 
-                # 调整帧大小以匹配摄像头输出分辨率
-                if frame.shape[:2] != (self.height, self.width):
-                    frame_resized = cv2.resize(frame, (self.width, self.height))
+                if cam is None:
+                    break
+
+                if frame.shape[:2] != (h, w):
+                    frame_resized = cv2.resize(frame, (w, h))
                 else:
                     frame_resized = frame
                 
-                # 发送帧到虚拟摄像头
-                self.cam.send(frame_resized)
-                self.cam.sleep_until_next_frame()
+                cam.send(frame_resized)
+                cam.sleep_until_next_frame()
             except Exception as e:
                 print(f"输出帧时出错: {e}")
                 break
